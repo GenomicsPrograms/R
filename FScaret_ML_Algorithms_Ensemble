@@ -1,0 +1,18 @@
+## FSCARET scoring the variables in the cleaned data for patient group A ##
+library(caret)
+library(fscaret)
+setwd("C:/Users/margaret/Documents/Singapore_Project/")
+
+data <- read.csv("Cleaned_Patient_Set_A.txt", header=TRUE, sep=",")
+dataDummy <- dummyVars("~.", data=data, fullRank=F)
+data <- as.data.frame(predict(dataDummy, data))
+splitIndex <- createDataPartition(data$allergic_rhinitis_nose_blockage_intermittent, p = .75, list = FALSE, times = 1)
+trainDF <- data[ splitIndex,]
+testDF <- data[-splitIndex,]
+dim(trainDF)
+dim(testDF)
+fsModels <- c("lm", glm", "lmStepAIC") # 2 minutes
+myFS <- fscaret(trainDF, testDF, myTimeLimit = 40, preprocessData=TRUE, Used.funcRegPred = fsModels, with.labels=TRUE, supress.output=FALSE, no.cores=2)
+
+myFS$VarImp
+myFS$PPlabels
