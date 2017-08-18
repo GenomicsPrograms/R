@@ -1,0 +1,12 @@
+R Protocol:
+
+
+1) Read in data file with headers: data = read.table("file.txt", header=T, sep="\t")
+
+2) Find the dimensions of the dataframe: dim(data)
+
+3) Stack multiple columns into one: cols <- cbind(stack(data[1:245]))
+
+4) Convert the list to a dataframe: df <- data.frame(cols)
+
+5) Save to a file: write.table(df, "stacked.txt, sep="\t", quote=F)
