@@ -1,0 +1,230 @@
+rm(list=ls())
+setwd("c:/projects/mirna_luad/studies_plasma/") ## change as desired
+
+library("limma")
+library("preprocessCore")
+library("Biobase") 
+
+quantile_normalisation <- function(df,tieMethod){
+  df.rank <- apply(df,2,rank,ties.method=tieMethod)
+  df.sorted <- data.frame(apply(df, 2, sort))
+  df.mean <- apply(df.sorted, 1, mean)
+   
+  index_to_mean <- function(my_index, my_mean){
+    return(my_mean[my_index])
+  }
+   
+  df.final <- apply(df.rank, 2, index_to_mean, my_mean=df.mean)
+  rownames(df.final) <- rownames(df)
+  return(df.final)
+}
+
+studyName="wozinak"
+##studyName="tcga"
+
+filenamepath="./wozniak/GSE64591_non-normalized_noheader_120_avgdDup.txt"
+##filenamepath ="./TCGA_non-normalized_clean_noheader_nodup.csv"
+
+## Wozniak: Following normalization Ct values with an interquartile range (IQR) of less than 1.5...were removed
+
+quartileElimMode='keepOutliers' ## used by whole-DF analysis, not byRow
+quartileByRowQDiff=1.5 ## comparison value for removal
+quartileByRowQDiffCompare='keepLessThan' ##|keepLessThan,keepMoreThan
+quartileMode='byRow' ## |byRow, byDF
+numCtrl=100
+numSmpl=100
+contrastProportion=0.05
+doLog2='yes'
+doLog2Mode='beforeQuantileNorm' ## |afterQuantileNorm, beforeQuantileNorm
+
+
+	## read in file
+	d.raw <- read.csv(filenamepath, header=TRUE, sep="\t", row.names=1)
+	d.raw.expr <- new("ExpressionSet", exprs=as.matrix(d.raw))
+
+	## assert test - should be true
+	is.data.frame(d.raw)	## verify we have a dataframe
+	##
+	## quantile normalization 
+	if (doLog2=='yes' & doLog2Mode=='beforeQuantileNorm') {
+		d.qnormlog = log2(d.raw)
+		d.qnorm1 <- quantile_normalisation(d.qnormlog,"average")
+	}
+	if (doLog2=='yes' & doLog2Mode=='afterQuantileNorm') {
+		d.qnorm1 <- quantile_normalisation(d.raw,"average")
+		d.qnormlog = log2(d.qnorm1)
+	}
+	if (doLog2=='no') {
+		d.qnorm1 <- quantile_normalisation(d.raw,"average")
+		d.qnormlog <- d.qnorm1
+	}
+	
+	## convert back to a df
+	d.qnormprep <- as.data.frame(d.qnormlog, row.names = rownames(d.raw), stringsAsFactors = default.stringsAsFactors())
+
+	## define function for quartile difference between 3rd and 1st quartiles
+	quantfun0 <- function(x) quantile(x, probs=0.75) - quantile(x, probs=0.25)
+	## add as a new column
+	d.qnormprep$qdiff = apply(d.qnormprep,1,quantfun0)
+
+	if(quartileMode=='byRow') {
+		if(quartileByRowQDiffCompare=='keepLessThan') {
+			d.qnorm <- d.qnormprep[d.qnormprep$qdiff < quartileByRowQDiff,]
+		}
+		else {
+			d.qnorm <- d.qnormprep[d.qnormprep$qdiff > quartileByRowQDiff,]
+		}
+	}
+	if (quartileMode=='byDF'){
+		##
+		##  get outliers and replace non-outliers with NA (since they remove IQR < quartileByRowQDiff)
+		qnt <- quantile(as.matrix(d.qnormprep), probs=c(0.25,0.75))
+		if(quartileElimMode=='keepOutliers') {	
+			## if we are keeping, then we set those within IQR quartileByRowQDiff to NA
+			d.qnormprep[d.qnormprep> qnt[1] & d.qnormprep< qnt[2]] <- NA
+		}
+		if(quartileElimMode=='elimOutliers') {
+			d.qnormprep[d.qnormprep< qnt[1] | d.qnormprep> qnt[2]] <- NA
+		}
+		d.qnorm <- d.qnormprep
+	}
+
+	## get rid of qdiff column
+	d.qnorm[201] <- NULL
+	## d qnorm to expression set, control and sample cases
+	d.qnorm.expr <- new("ExpressionSet", exprs=as.matrix(d.qnorm))
+	d.qnorm.ctrl <- d.qnorm[,1:numCtrl]
+	
+
+## We also report adjusted p-values corrected for multiple testing using the Benjamini-Holm method to control for the false positive error rate. 
+## Logistic regression with a lasso penalty (with penalty parameter tuning conducted by 20-fold cross-validation) was used to select a panel of miRNAs for discriminating between cases and controls. 
+## Logistic regression models were used to evaluate whether the 24-miRNA panel was associated with lung cancer after adjustment for known risk factors for lung cancer (age, sex and smoking status). 
+## The area under the receiver operating characteristic curve (AUC) was calculated to assess the discriminatory power of the model. 
+## Internal validation of the selected model was conducted by calculating the bootstrap optimism-corrected AUC. 
+## This correction accounts for overfitting of the model parameters for the selected model. 
+## Additionally, an optimism-correct AUC was calculated based on bootstrapping the entire model selection process. 
+
+
+	
+	##
+	## differentially regulated miRNAs
+	##  linear model for each miRNA
+	##  standard errors (SE) are moderated using an empirical Bayes model resulting in moderated t-statistics for each miRNA
+	## the control is in d.qnorm.ctrl and the test is in d.qnorm.smpl
+	design = NULL
+	design=vector(mode='numeric',length=ncol(d.qnorm))
+	design[0:numCtrl]=1
+	design.matrix = model.matrix(~0 + factor(design))
+	colnames(design.matrix) = c('CRTL','SMPL')
+	contrast = makeContrasts(CRTL, SMPL, levels=design.matrix)
+
+	fit <- lmFit(d.qnorm, design.matrix)
+	fit2 <- contrasts.fit(fit,contrast)
+	fit2 <- eBayes(fit2)
+
+	d.qnorm.expr.mtrx <- as.matrix(d.qnorm.expr)
+
+
+
+
+library("tspair")
+classes <- c(
+1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+,
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+)
+yesPredVal = 0
+
+res <- matrix(nrow=0, ncol=4)
+colnames(res) <- c('iteration', 'score', 'mir1', 'mir2')
+tp <- tn <- fp <- fn <- 0
+out = 'TSP LOOCV:\nSample\tClass label\tPredicted class label\n'	
+## actual prediction work
+	## loop columns		
+	for(i in 1:ncol(d.qnorm.expr.mtrx)){
+		tsp <- tspcalc(d.qnorm.expr.mtrx[, -i], classes[-i])
+		known <- classes[i]
+		pred <- predict(tsp, d.qnorm.expr.mtrx)[i]
+		if(pred == known){
+			if(pred == yesPredVal){tp <- tp+1}	else{	tn <- tn+1}
+		}
+		else{
+			if(pred == yesPredVal){fp <- fp+1} else{fn <- fn+1}
+		}
+	out = paste(out, colnames(d.qnorm)[i], "\t", known, "\t", pred, "\n", sep="")
+	pred.res <- rbind(res, c(i, tsp$tspscore[1], rownames(d.qnorm)[tsp$index[1,1]], rownames(d.qnorm)[tsp$index[1,2]]))
+	}
+
+## output
+	out = paste(out, ncol(d.qnorm), ' predictions; accuracy, sensitivity, specificity, PPV and NPV in
+fractions are ', round((tp+tn)/(tp+tn+fp+fn), 3), ', ', round(tp/(tp+fn), 3) , ', ',
+round(tn/(tn+fp), 3), ', ', round(tp/(tp+fp), 3) , ', and ', round(tn/(tn+fn), 3), ',
+respectively; mean (range; SD) of TSP scores for the topmost TS pairs is ',
+round(mean(as.numeric(res[, 'score'])), 2), ' (', round(min(as.numeric(res[, 'score'])), 2), '-',
+round(max(as.numeric(res[, 'score'])), 2), '; ', round(sd(as.numeric(res[, 'score'])), 2), ').
+There are a total of ', length(unique(res[, 'gene1'])), ' and ', length(unique(res[, 'gene2'])),
+' unique mirBase for mir-1 and -2, respectively, in ', ncol(exp), ' topmost TS pairs with
+following occurrence frequencies in fractions:\n', sep='')
+tspmiRNATab <- as.matrix(append(res[, 'gene1'], res[, 'gene2']))
+tspUnqmiRNA <- unique(tspmiRNATab)
+for(i in 1:length(tspUnqmiRNA)){
+out = paste(out, tspUnqmiRNA[i], round(length(tspmiRNATab [tspGeneTab[, 1]==tspUnqmiRNA [i],
+])/ncol(exp), 3), '\n', sep='\t')
+}
+cat(out)
+
+# SVM LOOCV
+library("CMA")
+diffTest = "limma"
+diffGeneNum = 24
+svmCost <- c(0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50)
+tp <- tn <- fp <- fn <- 0
+
+# actual prediction work
+lsets <- GenerateLearningsets(n=ncol(d.qnorm.expr.mtrx), y=classes, method=c('LOOCV'))
+svm <- classification(t(d.qnorm.expr.mtrx), factor(classes), learningsets=lsets,
+genesellist=list(method=diffTest), classifier=svmCMA, nbgene= diffGeneNum,
+tuninglist=list(grids=list(cost=svmCost)), probability=T, models=T)
+svm <- join(svm)
+
+
+# output
+# CMA internally re-names class labels
+	out = paste('SVM LOOCV with ', diffTest, ' and nbgene=', diffGeneNum, ':\nSample\tClass
+label\tClass label as per CMA\tPredicted class label as per CMA\n', sep='')
+	# since this is the way LOOCV training sets are generated in CMA
+	for(i in 1:ncol(d.qnorm.expr)){
+		j <- ncol(d.qnorm.expr.mtrx)-(i-1)
+		pred <- svm@yhat[j]
+		known <- svm@y[j]
+		if(pred == known){
+			if(pred == yesPredVal){tp <- tp+1} else{tn <- tn+1}
+		}
+		else{
+			if(pred == yesPredVal){fp <- fp+1} else{fn <- fn+1}
+		}
+	out = paste(out, colnames(d.qnorm.expr.mtrx)[i], '\t', classes[i], '\t', known, '\t', pred, '\n', sep='')
+	}
+
+out = paste(out, ncol(d.qnorm.expr.mtrx), ' predictions; accuracy, sensitivity, specificity, PPV and NPV in
+fractions are ', round((tp+tn)/(tp+tn+fp+fn), 3), ', ', round(tp/(tp+fn), 3) , ', ',
+round(tn/(tn+fp), 3), ', ', round(tp/(tp+fp), 3) , ', and ', round(tn/(tn+fn), 3), ',
+respectively. ', sep='')
+svmGenes <- GeneSelection(t(d.qnorm.expr.mtrx), classes, learningsets=lsets, method=diffTest)
+temp <- numeric()
+for(i in 1:ncol(d.qnorm.expr.mtrx)){
+temp <- c(temp, toplist(svmGenes, k=diffGeneNum, iter=i, show=F)$index)
+}
+temp2 <- unique(temp)
+
+out = paste(out, ' A total of ', length(temp2), ' genes occur in the ', ncol(exp), ' classifiers,
+with occurrence frequencies in fractions of:\n', sep='')
+for(i in 1:length(temp2)){
+out = paste(out, rownames(d.qnorm)[temp2[i]], '\t', round(sum(temp==temp2[i])/ncol(d.qnorm.expr), 3), '\n',
+sep='')
+}
+cat(out);
