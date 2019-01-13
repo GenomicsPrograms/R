@@ -1,0 +1,17 @@
+####################################################################################
+## Programmer: Margaret Linan 
+## Purpose: Convert the ENSG ID to Entrez ID
+## Date: 7/11/2018
+
+
+library(dplyr)
+library(annotables)
+mydata = read.table("JoinedTables.txt", sep="\t", header=TRUE)
+
+ref <- grch38[1:2]
+names(df) <- c("geneID", "entrez")
+
+conv <- left_join(x=ref, y=mydata)
+
+write.table(conv, "entrez_conv.txt", sep="\t", quote=FALSE, row.name=FALSE)
+
